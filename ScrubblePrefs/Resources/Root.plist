@@ -18,6 +18,34 @@
 		</dict>
 		<dict>
 			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>label</key>
+			<string>Filter Metadata</string>
+			<key>key</key>
+			<string>metadataFilterEnabled</string>
+			<key>defaults</key>
+			<string>fr.rootfs.scrubbleprefs</string>
+			<key>PostNotification</key>
+			<string>fr.rootfs.scrubbleprefs-updated</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>label</key>
+			<string>Scrobble current track on launch</string>
+			<key>key</key>
+			<string>scrobbleOnStartup</string>
+			<key>defaults</key>
+			<string>fr.rootfs.scrubbleprefs</string>
+			<key>PostNotification</key>
+			<string>fr.rootfs.scrubbleprefs-updated</string>
+		</dict>
+		<dict>
+			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
 			<string>Credentials</string>
@@ -100,6 +128,35 @@
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Authorization</string>
+			<key>footerText</key>
+			<string>Recommended: authorize via browser (no password needed). Or use password auth below as fallback.</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Authorize with Last.fm</string>
+			<key>action</key>
+			<string>authorizeWithLastfm</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Complete Authorization</string>
+			<key>action</key>
+			<string>completeAuthorization</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Password Auth (optional)</string>
 		</dict>
 
 		<dict>
@@ -209,6 +266,15 @@
 			<string>PSGroupCell</string>
 			<key>label</key>
 			<string>Links</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Open Library</string>
+			<key>action</key>
+			<string>openLibrary</string>
 		</dict>
 
 		<dict>

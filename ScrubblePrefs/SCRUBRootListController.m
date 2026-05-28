@@ -1,39 +1,12 @@
-#include "Preferences/PSSpecifier.h"
-#include "Preferences/PSTableCell.h"
 #import <Foundation/Foundation.h>
-#include <objc/objc.h>
-#include <UIKit/UIKit.h>
-#include <stdbool.h>
-#import "SCRUBRootListController.h"
-#import <spawn.h>
-#import <libroot.h>
-#import "include/NSTask.h"
+#import <UIKit/UIKit.h>
 #import <objc/runtime.h>
-#import <CommonCrypto/CommonCrypto.h>
-#import <Foundation/NSURLSession.h>
-
-NSString *md5(NSString *str) {
-	const char *cstr = [str UTF8String];
-	unsigned char result[CC_MD5_DIGEST_LENGTH];
-
-	CC_MD5(cstr, (int)strlen(cstr), result);
-	NSMutableString *result_ns = [[NSMutableString alloc ] init];
-	for (int i = 0 ; i < CC_MD5_DIGEST_LENGTH ; i++) [result_ns appendFormat:@"%02x", result[i]];
-	return result_ns;
-}
-
-
-NSString *queryString(NSDictionary *items) {
-	NSURLComponents *components = [[NSURLComponents alloc] init];
-	NSMutableArray <NSURLQueryItem *> *queryItems = [NSMutableArray array];
-
-	for (NSString *key in items.allKeys) {
-		[queryItems addObject:[NSURLQueryItem queryItemWithName:key value:items[key]]];
-	}
-
-    components.queryItems = queryItems;
-	return components.URL.query ?: @"";
-}
+#import <libroot.h>
+#import "Preferences/PSSpecifier.h"
+#import "SCRUBRootListController.h"
+#import "include/NSTask.h"
+#import "ScrubbleUtils.h"
+#import "Constants.h"
 
 @implementation SCRUBRootListController
 
@@ -51,7 +24,6 @@ NSString *queryString(NSDictionary *items) {
 }
 
 - (NSString*)daemonStatus:(PSSpecifier*)sender {
-    NSLog(@"Checking Scrubble status");
     @try{
         NSPipe *pipe = [NSPipe pipe];
         NSFileHandle *file = pipe.fileHandleForReading;
@@ -68,8 +40,6 @@ NSString *queryString(NSDictionary *items) {
         NSData *data = [file readDataToEndOfFile];
         NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
         [file closeFile];
-        
-        NSLog(@"Scrubble %@", output);
 
         if (!output || [[output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] isEqualToString:@""]) return @"Stopped";
         
@@ -78,7 +48,7 @@ NSString *queryString(NSDictionary *items) {
         return (self.daemonRunning ? @"Running" : @"Stopped");
     }
     @catch(NSException *e){
-        NSLog(@"Exception: %@", e.reason);
+        NSLog(@"[Scrubble] Exception: %@", e.reason);
     }
 
     return @"Stopped";
@@ -117,6 +87,140 @@ NSString *queryString(NSDictionary *items) {
     return (self.daemonRunning ? @"Stop Scrubble" : @"Start Scrubble");
 }
 
+- (NSUserDefaults *)prefs {
+    return [[NSUserDefaults alloc] initWithSuiteName:@"fr.rootfs.scrubbleprefs"];
+}
+
+- (void)authorizeWithLastfm {
+    NSString *apiKey = [self readPreferenceValue:[self specifierForID:@"apiKey"]];
+    NSString *apiSecret = [self readPreferenceValue:[self specifierForID:@"apiSecret"]];
+
+    if (!apiKey.length || !apiSecret.length) {
+        [self showAlert:@"Error" message:@"API Key and Secret are required"];
+        return;
+    }
+
+    NSString *sigContent = [NSString stringWithFormat:@"api_key%@methodauth.getToken%@", apiKey, apiSecret];
+
+    NSDictionary *params = @{
+        @"method": @"auth.getToken",
+        @"api_key": apiKey,
+        @"api_sig": ScrubbleMD5(sigContent),
+        @"format": @"json"
+    };
+
+    NSMutableURLRequest *req = [[NSMutableURLRequest alloc] initWithURL:[NSURL URLWithString:LASTFM_API_URL]];
+    [req setHTTPMethod:@"POST"];
+    [req setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
+    [req setHTTPBody:[ScrubbleQueryString(params) dataUsingEncoding:NSUTF8StringEncoding]];
+
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSHTTPURLResponse *resp = (NSHTTPURLResponse *)response;
+            if (resp.statusCode != 200 || !data) {
+                [self showAlert:@"Error" message:@"Failed to get token"];
+                return;
+            }
+
+            NSDictionary *dict = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            NSString *token = dict[@"token"];
+            if (!token) {
+                [self showAlert:@"Error" message:dict[@"message"] ?: @"Failed to get token"];
+                return;
+            }
+
+            // Persist pending token (survives controller dealloc when switching to Safari)
+            [[self prefs] setObject:token forKey:@"pendingAuthToken"];
+            [[self prefs] synchronize];
+
+            NSString *authURL = [NSString stringWithFormat:@"https://www.last.fm/api/auth/?api_key=%@&token=%@", apiKey, token];
+            [[UIApplication sharedApplication] openURL:[NSURL URLWithString:authURL] options:@{} completionHandler:nil];
+
+            [self showAlert:@"Authorize" message:@"Authorize in browser, then come back and tap Complete Authorization"];
+        });
+    }] resume];
+}
+
+- (void)completeAuthorization {
+    NSString *pendingToken = [[self prefs] objectForKey:@"pendingAuthToken"];
+    if (!pendingToken) {
+        [self showAlert:@"Error" message:@"No pending authorization. Tap 'Authorize with Last.fm' first."];
+        return;
+    }
+
+    NSString *apiKey = [self readPreferenceValue:[self specifierForID:@"apiKey"]];
+    NSString *apiSecret = [self readPreferenceValue:[self specifierForID:@"apiSecret"]];
+
+    NSString *sigContent = [NSString stringWithFormat:@"api_key%@methodauth.getSessiontoken%@%@", apiKey, pendingToken, apiSecret];
+
+    NSDictionary *params = @{
+        @"method": @"auth.getSession",
+        @"api_key": apiKey,
+        @"token": pendingToken,
+        @"api_sig": ScrubbleMD5(sigContent),
+        @"format": @"json"
+    };
+
+    NSMutableURLRequest *req = [[NSMutableURLRequest alloc] initWithURL:[NSURL URLWithString:LASTFM_API_URL]];
+    [req setHTTPMethod:@"POST"];
+    [req setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
+    [req setHTTPBody:[ScrubbleQueryString(params) dataUsingEncoding:NSUTF8StringEncoding]];
+
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSHTTPURLResponse *resp = (NSHTTPURLResponse *)response;
+            if (resp.statusCode != 200 || !data) {
+                [self showAlert:@"Error" message:@"Authorization failed"];
+                return;
+            }
+
+            NSDictionary *dict = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            NSDictionary *session = dict[@"session"];
+            if (!session) {
+                [self showAlert:@"Error" message:dict[@"message"] ?: @"Authorization failed"];
+                return;
+            }
+
+            NSString *sessionKey = session[@"key"];
+            NSString *username = session[@"name"];
+
+            // Store in prefs so the daemon can read them
+            NSUserDefaults *defaults = [self prefs];
+            [defaults setObject:sessionKey forKey:@"token"];
+            if (username) [defaults setObject:username forKey:@"username"];
+            [defaults removeObjectForKey:@"pendingAuthToken"];
+            [defaults synchronize];
+
+            // Update the username specifier in the UI
+            if (username) {
+                PSSpecifier *usernameSpec = [self specifierForID:@"username"];
+                if (usernameSpec) [self setPreferenceValue:username specifier:usernameSpec];
+            }
+
+            // Notify daemon
+            CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                                 CFSTR("fr.rootfs.scrubbleprefs-updated"),
+                                                 NULL, NULL, true);
+
+            [self showAlert:@"Success" message:[NSString stringWithFormat:@"Authorized as %@!", username ?: @"unknown"]];
+        });
+    }] resume];
+}
+
+- (void)openLibrary {
+    NSString *username = [self readPreferenceValue:[self specifierForID:@"username"]];
+    NSString *url = (username.length > 0)
+        ? [NSString stringWithFormat:@"https://www.last.fm/user/%@/library", username]
+        : @"https://www.last.fm/";
+    [[UIApplication sharedApplication] openURL:[NSURL URLWithString:url] options:@{} completionHandler:nil];
+}
+
+- (void)showAlert:(NSString *)title message:(NSString *)message {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 -(void) testLogin {
     NSString *username = [self readPreferenceValue:[self specifierForID:@"username"]];
     NSString *password = [self readPreferenceValue:[self specifierForID:@"password"]];
@@ -124,11 +228,11 @@ NSString *queryString(NSDictionary *items) {
     NSString *apiSecret = [self readPreferenceValue:[self specifierForID:@"apiSecret"]];
 
     NSString *sigContent = [NSString stringWithFormat:@"api_key%@method%@password%@username%@%@", apiKey, @"auth.getMobileSession", password, username, apiSecret];
-	NSString *sig = md5(sigContent);
-	
-	NSString *query = queryString(@{@"method": @"auth.getMobileSession", @"username": username, @"password": password, @"api_key": apiKey, @"api_sig": sig, @"format": @"json"});
+	NSString *sig = ScrubbleMD5(sigContent);
 
-	NSURL *url = [NSURL URLWithString:@"https://ws.audioscrobbler.com/2.0/"];
+	NSString *query = ScrubbleQueryString(@{@"method": @"auth.getMobileSession", @"username": username, @"password": password, @"api_key": apiKey, @"api_sig": sig, @"format": @"json"});
+
+	NSURL *url = [NSURL URLWithString:LASTFM_API_URL];
 
 	NSMutableURLRequest *req = [[NSMutableURLRequest alloc] initWithURL:url];
 	[req setHTTPMethod:@"POST"];

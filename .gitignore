@@ -1,3 +1,8 @@
 .theos/
 packages/
+build/
 .DS_Store
+.cache/
+.omc/
+compile_commands.json
+entitlements.macos.local.plist

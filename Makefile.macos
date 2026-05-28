@@ -1,0 +1,92 @@
+CC = clang
+APP_NAME = Scrubble
+BUNDLE_ID = fr.rootfs.scrubble
+
+SRC_DIR = src
+BUILD_DIR = build/macos
+APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
+CONTENTS_DIR = $(APP_BUNDLE)/Contents
+MACOS_DIR = $(CONTENTS_DIR)/MacOS
+RESOURCES_DIR = $(CONTENTS_DIR)/Resources
+
+SOURCES = $(SRC_DIR)/main.m \
+          $(SRC_DIR)/Scrobbler.m \
+          $(SRC_DIR)/CredentialStore.m \
+          $(SRC_DIR)/ScrubbleMacSettings.m \
+          $(SRC_DIR)/MetadataFilter.m
+
+# Use theos patched headers for MediaRemote.h
+CFLAGS = -fobjc-arc \
+         -Wno-deprecated-declarations \
+		 -I${THEOS}/vendor/include -Iinclude
+
+FRAMEWORKS = -framework Cocoa \
+             -framework Security \
+             -framework ServiceManagement \
+             -framework UserNotifications \
+             -framework MediaRemote
+
+FRAMEWORK_PATHS = -F/System/Library/PrivateFrameworks
+
+LDFLAGS = $(FRAMEWORKS) $(FRAMEWORK_PATHS)
+
+.PHONY: all clean install run
+
+all: $(APP_BUNDLE)
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(APP_BUNDLE): $(BUILD_DIR) $(SOURCES)
+	@echo "Building $(APP_NAME) for macOS..."
+	mkdir -p $(MACOS_DIR)
+	mkdir -p $(RESOURCES_DIR)
+
+	# Copy resources
+	cp -f assets/StatusBarIcon.png $(RESOURCES_DIR)/
+	cp -f assets/Scrubble.icns $(RESOURCES_DIR)/
+
+	# Compile
+	$(CC) $(CFLAGS) $(SOURCES) $(LDFLAGS) -o $(MACOS_DIR)/$(APP_NAME)
+
+	# Create Info.plist
+	@echo '<?xml version="1.0" encoding="UTF-8"?>' > $(CONTENTS_DIR)/Info.plist
+	@echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' >> $(CONTENTS_DIR)/Info.plist
+	@echo '<plist version="1.0">' >> $(CONTENTS_DIR)/Info.plist
+	@echo '<dict>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <key>CFBundleExecutable</key>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <string>$(APP_NAME)</string>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <key>CFBundleIdentifier</key>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <string>$(BUNDLE_ID)</string>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <key>CFBundleName</key>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <string>$(APP_NAME)</string>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <key>CFBundlePackageType</key>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <string>APPL</string>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <key>CFBundleShortVersionString</key>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <string>1.0</string>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <key>CFBundleVersion</key>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <string>1</string>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <key>LSMinimumSystemVersion</key>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <string>11.0</string>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <key>LSUIElement</key>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <true/>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <key>CFBundleIconFile</key>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <string>Scrubble</string>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <key>NSPrincipalClass</key>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '    <string>NSApplication</string>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '</dict>' >> $(CONTENTS_DIR)/Info.plist
+	@echo '</plist>' >> $(CONTENTS_DIR)/Info.plist
+
+	codesign --force --deep --sign - --entitlements entitlements.macos.plist $(APP_BUNDLE)
+
+	@echo "Build complete: $(APP_BUNDLE)"
+
+clean:
+	rm -rf $(BUILD_DIR)
+
+install: $(APP_BUNDLE)
+	cp -R $(APP_BUNDLE) /Applications/
+
+run: $(APP_BUNDLE)
+	open $(APP_BUNDLE)
+
